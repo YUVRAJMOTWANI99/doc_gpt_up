@@ -20,6 +20,7 @@ from langchain_core.embeddings import Embeddings
 
 from src.ingestion import CreateIndex
 from src.rag_pipeline import QueryDoc
+from langchain_community.vectorstores import FAISS
 
 # Load project settings
 with open("setup.yaml", "r") as file:
@@ -178,6 +179,77 @@ def show_vector_store() -> None:
     )
     st.session_state["files_included"] = pd.Series(files_in_db)[df_files_edited["included"]].to_list()
 
+def _store_to_df(store):
+    v_dict=store.docstore._dict
+    data_rows=[]
+    for k in v_dict.keys():
+        if bool(v_dict[k].metadata):
+            doc_name=v_dict[k].metadata['source'].split('/')[-1]
+            page_number=v_dict[k].metadata['page']+1
+            content=v_dict[k].page_content
+            data_rows.append({"chunk_id":k,"document":doc_name,"page": page_number,"content":content})
+    vector_df=pd.DataFrame(data_rows)
+    return vector_df
+
+def _delete_document_childs(store,document):
+    vector_df=_store_to_df(store)
+    chunks_list=vector_df.loc[vector_df['document']==document]['chunk_id'].to_list()
+    # print(chunks_list)
+    store.delete(chunks_list)
+
+# def _show_vstore(store):
+#     vector_df=_store_to_df(store)
+#     print(vector_df['chunk_id'])
+
+def choose_to_delete():
+    """
+    Show files to delete
+    """
+    # Load files list from knowledge base
+    files_in_db = list(map(os.path.basename, glob.glob(f'data/{st.session_state["username"]}/*.pdf')))
+
+    # Show editable list of files
+    with st.popover("Delete Uploaded Docs"):
+
+        df_files = pd.DataFrame({
+            "file_name": files_in_db,
+            "to_delete": False
+        })
+        df_files_to_delete = st.data_editor(
+            df_files,
+            hide_index=True,
+            num_rows="fixed",
+            disabled=["file_name"],
+            column_config={
+                "file_name": st.column_config.TextColumn(
+                    "File Name",
+                    width="small"
+                ),
+                "to_delete": st.column_config.CheckboxColumn(
+                    "Delete",
+                    width="medium",
+                    help="Filter files for deleting"
+                )
+            }
+        )
+        if st.button("Delete Docs"):
+                    st.warning("Are sure you want to delete selected files?")
+            # if st.button("Yes"):
+                    file_name_to_delete_list=df_files_to_delete[df_files_to_delete['to_delete']]['file_name']
+                    path=os.getcwd()
+                    dir_list = os.listdir(path+f'\data\{st.session_state['username']}\parent_vectorstore')
+                    new_db=FAISS.load_local(path+f'\data\{st.session_state['username']}\child_vectorstore',embeddings=HuggingFaceEmbeddings,allow_dangerous_deserialization=True)
+                    if st.button("Yes")==0:
+                        for file_name_to_delete in file_name_to_delete_list: 
+                            os.remove(path+f'\data\{st.session_state['username']}\{file_name_to_delete}')
+                            for file in dir_list:
+                                with open(path+f"\data\{st.session_state['username']}\parent_vectorstore\{file}") as f:
+                                    d=f.read()
+                                    my_dict = eval(d)
+                                if path+f"\data/{st.session_state['username']}/{file_name_to_delete}"==path+f"\{my_dict['kwargs']['metadata']['source']}":
+                                    os.remove(path+f'\data\{st.session_state['username']}\parent_vectorstore\{file}')
+                            _delete_document_childs(new_db,file_name_to_delete)
+                    # _show_vstore(new_db)
 
 def post_inference_buttons() -> None:
     """
